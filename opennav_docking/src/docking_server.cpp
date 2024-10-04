@@ -63,7 +63,7 @@ DockingServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 1);
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
-
+  target_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("target_pose", 10);
   double action_server_result_timeout;
   nav2_util::declare_parameter_if_not_declared(
     node, "action_server_result_timeout", rclcpp::ParameterValue(10.0));
@@ -83,6 +83,10 @@ DockingServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     std::bind(&DockingServer::undockRobot, this),
     nullptr, std::chrono::milliseconds(500),
     true, server_options);
+
+  // Initialize the target_dock_id publisher
+  target_dock_id_publisher_ = this->create_publisher<std_msgs::msg::String>("/target_dock_id", 10);
+  RCLCPP_INFO(get_logger(), "Publisher for /target_dock_id created.");
 
   // Create composed utilities
   mutex_ = std::make_shared<std::mutex>();
@@ -139,6 +143,9 @@ DockingServer::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
   destroyBond();
 
   return nav2_util::CallbackReturn::SUCCESS;
+}
+void DockingServer::publishTargetPose(const geometry_msgs::msg::PoseStamped &target_pose) {
+  target_pose_publisher_->publish(target_pose);
 }
 
 nav2_util::CallbackReturn
@@ -223,7 +230,15 @@ void DockingServer::dockRobot()
 
   try {
     // Get dock (instance and plugin information) from request
+    std::string dock_id = "dock1";  // Default dock_id
     if (goal->use_dock_id) {
+      dock_id = goal->dock_id;
+      // Publish the dock_id to the /target_dock_id topic
+      std_msgs::msg::String dock_id_msg;
+      dock_id_msg.data = dock_id;
+      target_dock_id_publisher_->publish(dock_id_msg);
+      RCLCPP_INFO(get_logger(), "Published dock_id '%s' to /target_dock_id topic.", dock_id.c_str());
+
       RCLCPP_INFO(
         get_logger(),
         "Attempting to dock robot at charger %s.", goal->dock_id.c_str());
@@ -407,13 +422,25 @@ bool DockingServer::approachDock(Dock * dock, geometry_msgs::msg::PoseStamped & 
 
     // Transform target_pose into base_link frame
     geometry_msgs::msg::PoseStamped target_pose = dock_pose;
+    // NOTE: TARGET POSE SHOULD ALWAYS POINT IN THE FORWARD DIRECTION OF THE ROBOT IRRESPECTIVE OF DOCKING BACK OR FRONT
     target_pose.header.stamp = rclcpp::Time(0);
-
+    // Debug print the target pose orientation
+    RCLCPP_INFO(get_logger(), "Target pose orientation: x=%.3f, y=%.3f, z=%.3f, w=%.3f",
+      target_pose.pose.orientation.x,
+      target_pose.pose.orientation.y,
+      target_pose.pose.orientation.z,
+      target_pose.pose.orientation.w);
     // Make sure that the target pose is pointing at the robot when moving backwards
     // This is to ensure that the robot doesn't try to dock from the wrong side
     if (dock_backwards_) {
       target_pose.pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(
         tf2::getYaw(target_pose.pose.orientation) + M_PI);
+            // Debug print the target pose orientation
+    RCLCPP_INFO(get_logger(), "Target pose orientation after correction: x=%.3f, y=%.3f, z=%.3f, w=%.3f",
+      target_pose.pose.orientation.x,
+      target_pose.pose.orientation.y,
+      target_pose.pose.orientation.z,
+      target_pose.pose.orientation.w);
     }
 
     // The control law can get jittery when close to the end when atan2's can explode.
@@ -432,7 +459,8 @@ bool DockingServer::approachDock(Dock * dock, geometry_msgs::msg::PoseStamped & 
       throw opennav_docking_core::FailedToControl("Failed to get control");
     }
     vel_publisher_->publish(command);
-
+    // Publish the target pose for visualization in RViz
+    publishTargetPose(target_pose);
     if (this->now() - start > timeout) {
       throw opennav_docking_core::FailedToControl(
               "Timed out approaching dock; dock nor charging detected");

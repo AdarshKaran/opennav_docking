@@ -31,6 +31,8 @@
 #include "opennav_docking/navigator.hpp"
 #include "opennav_docking_core/charging_dock.hpp"
 #include "tf2_ros/transform_listener.h"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace opennav_docking
 {
@@ -214,7 +216,8 @@ protected:
    */
   rcl_interfaces::msg::SetParametersResult
   dynamicParametersCallback(std::vector<rclcpp::Parameter> parameters);
-
+  // Declare the publishTargetPose method
+  void publishTargetPose(const geometry_msgs::msg::PoseStamped &target_pose);
   // Dynamic parameters handler
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
 
@@ -250,6 +253,10 @@ protected:
 
   std::unique_ptr<DockingActionServer> docking_action_server_;
   std::unique_ptr<UndockingActionServer> undocking_action_server_;
+  // Publisher for visualizing target_pose
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pose_publisher_;
+  // Publisher for target_dock_id
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr target_dock_id_publisher_;
 
   std::unique_ptr<DockDatabase> dock_db_;
   std::unique_ptr<Navigator> navigator_;
